@@ -30,4 +30,6 @@ insert into dbo.Persons values(2, 'Ram', 'Kumar', 'ANDra', 2);
 SELECT * FROM persons;
 SELECT * FROM Persons_target;
 
+EXEC [dbo].[dba_GenerateMergeStatement] @SOURCE_TABLE='care.dbo.Persons', @TARGET_TABLE='care.dbo.Persons_target', @PRIMARY_KEYS='PersonID', @SPECIAL_KEYS = 'City'
+
 ```
