@@ -1,0 +1,100 @@
+USE care
+
+
+drop proc if exists [dbo].[dba_GenerateMergeStatement];
+
+GO
+
+CREATE  PROCEDURE [dbo].[dba_GenerateMergeStatement] (
+	@SOURCE_TABLE NVARCHAR(MAX),
+	@TARGET_TABLE  NVARCHAR(MAX),
+	@PRIMARY_KEYS  NVARCHAR(MAX),
+	@SPECIAL_KEYS NVARCHAR(MAX)
+)
+AS
+/*
+This SP will generate merge query only for source and target table having same schema
+*/
+
+DECLARE @MERGE_QUERY VARCHAR(MAX)='';
+DECLARE @COLUMNS_LIST VARCHAR(MAX);
+
+--- Preparing merge query using source and target table
+SELECT @MERGE_QUERY = @MERGE_QUERY + 'MERGE ' + @TARGET_TABLE + ' AS TARGET'
+SELECT @MERGE_QUERY = @MERGE_QUERY + '
+USING (SELECT * FROM ' + @SOURCE_TABLE + ') AS SOURCE'
+
+--- derive join condition based on the required primary keys passed in sp args 
+DECLARE @PK VARCHAR(MAX)=''
+SELECT @PK= @PK + 'SOURCE.' + value + ' = ' + 'TARGET.' + value +' AND ' FROM STRING_SPLIT(@PRIMARY_KEYS, ',');
+SELECT @MERGE_QUERY = @MERGE_QUERY + '
+ON ( ' + LEFT(@PK, LEN(@PK) -3 ) + ')'
+
+--- derive update condition based on the special keys passed in sp args which not matching
+DECLARE @SK VARCHAR(MAX)=''
+IF LEN(@SPECIAL_KEYS) != 0
+BEGIN
+SELECT @SK= @SK + 'SOURCE.' + value + ' != ' + 'TARGET.' + value +' AND ' FROM STRING_SPLIT(@SPECIAL_KEYS, ',');
+SELECT @SK = 'AND ( ' + LEFT(@SK, LEN(@SK) -3 ) +' )'
+END
+
+SELECT @MERGE_QUERY = @MERGE_QUERY + '
+WHEN MATCHED '+@SK+' THEN UPDATE SET'
+
+
+SELECT @COLUMNS_LIST = '';
+SELECT @COLUMNS_LIST = @COLUMNS_LIST + '  TARGET.' + T.[NAME] +  ' = SOURCE.' + S.[NAME] +',
+'
+FROM SYS.COLUMNS S INNER JOIN SYS.COLUMNS T
+ON(S.NAME = T.NAME)
+WHERE S.OBJECT_ID = OBJECT_ID(@SOURCE_TABLE) AND T.OBJECT_ID = OBJECT_ID(@TARGET_TABLE)
+AND S.[NAME] NOT IN (SELECT [COLUMN_NAME]
+                    FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS PK, INFORMATION_SCHEMA.KEY_COLUMN_USAGE C
+                    WHERE PK.TABLE_NAME = @SOURCE_TABLE
+                    AND CONSTRAINT_TYPE = 'PRIMARY KEY'
+                    AND C.CONSTRAINT_NAME = PK.CONSTRAINT_NAME)
+AND T.[NAME] NOT IN (SELECT [COLUMN_NAME]
+                    FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS PK, INFORMATION_SCHEMA.KEY_COLUMN_USAGE C
+                    WHERE PK.TABLE_NAME = @TARGET_TABLE
+                    AND CONSTRAINT_TYPE = 'PRIMARY KEY'
+                    AND C.CONSTRAINT_NAME = PK.CONSTRAINT_NAME)
+
+SELECT @MERGE_QUERY = @MERGE_QUERY + '
+'+ LEFT(@COLUMNS_LIST, LEN(@COLUMNS_LIST) -3 )
+
+--- preparing insert query which join condition does not satisfy 
+SELECT @MERGE_QUERY = @MERGE_QUERY +'
+WHEN NOT MATCHED BY TARGET THEN';
+
+--- get target columns
+SET @COLUMNS_LIST = ''
+SELECT @COLUMNS_LIST = @COLUMNS_LIST + 'TARGET.' + [NAME] +', '
+FROM SYS.COLUMNS
+WHERE OBJECT_ID = OBJECT_ID(@TARGET_TABLE)
+ORDER BY [NAME] ASC
+
+SELECT @COLUMNS_LIST = LEFT(@COLUMNS_LIST, LEN(@COLUMNS_LIST) - 1)
+SELECT @MERGE_QUERY = @MERGE_QUERY +  '
+INSERT( ' + @COLUMNS_LIST + ' )'
+
+--- get values from source columns
+SET @COLUMNS_LIST = ''
+
+SELECT @COLUMNS_LIST = @COLUMNS_LIST + 'SOURCE.' +[NAME] +', '
+FROM SYS.COLUMNS
+WHERE OBJECT_ID = OBJECT_ID(@SOURCE_TABLE)
+ORDER BY [NAME] ASC
+
+SELECT @COLUMNS_LIST = LEFT(@COLUMNS_LIST, LEN(@COLUMNS_LIST) - 1)
+SELECT @MERGE_QUERY = @MERGE_QUERY + '
+VALUES( ' + @COLUMNS_LIST + ' );'
+
+-- Final Merge query is
+PRINT(@MERGE_QUERY)
+
+GO
+
+
+EXEC [dbo].[dba_GenerateMergeStatement] @SOURCE_TABLE='care.dbo.Persons', @TARGET_TABLE='care.dbo.Persons_target', @PRIMARY_KEYS='PersonID,PersonID', @SPECIAL_KEYS = 'City,City'
+
+
